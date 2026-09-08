@@ -4,7 +4,9 @@
 
 - 在线使用：<https://lllwxx.github.io/flight-itinerary-app/>
 - 全程浏览器本地处理（OCR + 模板填充），图片不上传，手机 / 电脑通用。
-- OCR 引擎链：本地 PaddleOCR 服务 → Paddle.js 浏览器端 → Tesseract.js，逐级自动回退。
+- OCR 引擎链（三级自动回退）：本地 PaddleOCR 服务（开发机）→ **PaddleOCR.js 浏览器端
+  （PP-OCRv5 + onnxruntime-web WASM/WebGPU，模型与推理内核全部同源自托管）** → Tesseract.js。
+  静态站无 COOP/COEP 头，ORT 以单线程 WASM 运行（`numThreads:1 + proxy:false`），手机可用。
 
 ## 本地开发
 
