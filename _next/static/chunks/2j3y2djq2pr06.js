@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,41051,t=>{t.q("/flight-itinerary-app/_next/static/media/worker-entry-C9UNuyOJ.08s1k5ifvtam0.js")},85596,t=>{t.v(e=>Promise.all(["static/chunks/049s3owrysrj4.js"].map(e=>t.l(e))).then(()=>e(96756)))}]);
