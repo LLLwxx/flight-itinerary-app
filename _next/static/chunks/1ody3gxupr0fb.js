@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,24573,t=>{t.q("/flight-itinerary-app/_next/static/media/ort-wasm-simd-threaded.1g9bsamgwz4rq.wasm")},54004,t=>{t.q("/flight-itinerary-app/_next/static/media/ort.wasm.bundle.min.2vk-m65fr99s_.mjs")}]);
