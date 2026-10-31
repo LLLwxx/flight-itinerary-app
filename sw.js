@@ -1,26 +1,35 @@
 /*
- * 行程单助手 Service Worker（v33）
+ * 行程单助手 Service Worker（v34）
  *
- * 为什么需要：
- *   GitHub Pages 对静态资源的响应头是 `Cache-Control: max-age=600`，只有 10 分钟。
- *   识别模型（6.3MB）、ORT 推理内核（14MB）、PaddleOCR.js 的 SDK chunk（9.99MB）
+ * 两件事：
+ *   A. 资源持久缓存（v31 起）
+ *   B. 跨域隔离注入（v34 新增，iOS Safari 修复）
+ *
+ * ── A. 为什么需要缓存 ──
+ *   GitHub Pages 对静态资源的响应头只有 `Cache-Control: max-age=600`（10 分钟）。
+ *   识别模型（6.3MB）、ORT 推理内核（14MB）、PaddleOCR.js 的 SDK chunk（3.3MB gzip）
  *   体积大、又是不可变内容，每超过 10 分钟再打开就要重下一遍 —— 手机上体感极差。
  *
- * 策略：
- *   - 拦截同源下四类 GET：/paddleocr-models/、/ort/、/_next/static/chunks/、
- *     /_next/static/media/ort*，一律 cache-first；
- *   - 页面 HTML、模板 docx/xlsx、tessdata 等**不缓存**，直接走网络，
- *     这样应用发版后不会出现「用户被旧缓存卡住」的问题。
+ *   策略：拦截同源下四类 GET：/paddleocr-models/、/ort/、/_next/static/chunks/、
+ *   /_next/static/media/ort*，一律 cache-first；页面 HTML、模板 docx/xlsx、tessdata
+ *   等**不缓存**，直接走网络，这样应用发版后不会出现「用户被旧缓存卡住」的问题。
  *
- * v33 变更：
- *   补上 `_next/static/chunks/` —— 实测二次访问时 3.31MB 的 SDK chunk 仍要重下 3.17s，
- *   这是除模型/内核外最大的一块，缓存后二次访问端到端 4.7s → 约 1.5s。
- *   Next 的 chunk 文件名带内容 hash，缓存旧文件不会顶替新文件；CACHE_VERSION 升级会整体清理。
+ * ── B. 为什么要注入 COOP/COEP（v34）──
+ *   onnxruntime-web 1.29 只提供 `ort-wasm-simd-threaded.wasm`（pthreads 构建），
+ *   其 JS glue 在**模块求值阶段**就无条件执行：
+ *       new WebAssembly.Memory({ initial: 256, maximum: 65536, shared: true })
+ *   共享内存需要 SharedArrayBuffer，而 Safari/iOS 只在**跨域隔离**（cross-origin isolated）
+ *   的页面里才允许。GitHub Pages 不能自定义响应头 —— 于是 iOS 上模型下载到 100% 后
+ *   这一步直接抛错，引擎②失效、静默落回 Tesseract（用户看到的就是「进度到 99% 自动降级」）。
+ *   Chrome 桌面放宽了这条限制（非隔离也能分配 shared memory），所以只在苹果设备暴露。
  *
- * 更新机制：
- *   内容变化时升级 CACHE_VERSION 即可整体换新；activate 会清理旧版本缓存。
+ *   解法即 coi-serviceworker 思路：由 SW 在**导航响应**上补 COOP/COEP，
+ *   页面即获得 crossOriginIsolated = true，SAB 与共享内存恢复可用。
+ *   本站所有子资源均为同源（字体已由 next/font 自托管），因此 require-corp 无副作用。
+ *
+ * 更新机制：内容变化时升级 CACHE_VERSION 即可整体换新；activate 会清理旧版本缓存。
  */
-const CACHE_VERSION = "v33-1";
+const CACHE_VERSION = "v34-1";
 const CACHE_NAME = `ocr-assets-${CACHE_VERSION}`;
 const ASSET_PATTERNS = [
   /\/paddleocr-models\//,
@@ -54,6 +63,30 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+/**
+ * 导航请求：原样取 HTML，但补上 COOP/COEP 使其成为跨域隔离页面。
+ *
+ * 注意：`cache: "no-store"` 一是避免条件请求返回 304（304 无法携带 body 重建 Response），
+ * 二是保证发版后用户立刻拿到新 HTML。HTML 只有十几 KB，可以接受。
+ */
+async function navigateWithIsolation(request) {
+  const res = await fetch(request.url, {
+    method: "GET",
+    credentials: "same-origin",
+    redirect: "follow",
+    cache: "no-store",
+  });
+  if (!res.body || res.status === 204 || res.status === 205 || res.status === 304) return res;
+  const headers = new Headers(res.headers);
+  headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -65,6 +98,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (url.origin !== self.location.origin) return;
+
+  // 导航请求（页面本身）→ 注入跨域隔离头
+  if (req.mode === "navigate" || req.destination === "document") {
+    event.respondWith(
+      navigateWithIsolation(req).catch(async () => {
+        // 网络失败时退回浏览器默认行为（不吞掉错误页）
+        return fetch(req);
+      }),
+    );
+    return;
+  }
+
   if (!ASSET_PATTERNS.some((re) => re.test(url.pathname))) return;
 
   event.respondWith(
